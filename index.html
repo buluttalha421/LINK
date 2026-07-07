@@ -492,6 +492,49 @@ input, select { font-family: inherit; }
 <!-- ADMIN OVERLAY -->
 <div id="admin-overlay" class="admin-overlay" style="display:none"></div>
 
+<!-- KITCHEN DISPLAY SCREEN (kitchen tablet açar: ?kitchen=1) -->
+<div id="kitchen-screen" style="display:none; min-height:100vh; background:#0f0a06; color:#f5efe5; font-family:monospace; padding:24px">
+  <div style="text-align:center; margin-bottom:20px">
+    <div style="font-size:22px; font-weight:700">🍳 MUTFAK EKRANI</div>
+    <div id="kitchen-status" style="font-size:13px; color:#8a7866; margin-top:6px">Bağlanıyor...</div>
+  </div>
+  <div id="kitchen-log" style="max-width:500px; margin:0 auto"></div>
+</div>
+
+<!-- Firebase SDK (compat, CDN üzerinden — internet bağlantısı gerekir) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+
+<script>
+// ─── FIREBASE (çok cihazlı senkron) ──────────────────────────────────────────
+// BURAYA kendi Firebase projenin config bilgilerini yapıştır (console.firebase.google.com)
+const firebaseConfig = {
+  apiKey: "AIzaSyAS8Rwwpo1e4etNzL684Mbjq5FYrWCOs-0",
+  authDomain: "noname-1c7a7.firebaseapp.com",
+  databaseURL: "https://noname-1c7a7-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "noname-1c7a7",
+  storageBucket: "noname-1c7a7.firebasestorage.app",
+  messagingSenderId: "699708850933",
+  appId: "1:699708850933:web:f374d271806f26b598bbbc"
+};
+
+let FIREBASE_OK = false;
+let db = null;
+try {
+  if (!firebaseConfig.apiKey.includes("BURAYA")) {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+    FIREBASE_OK = true;
+  } else {
+    console.warn("Firebase config henüz girilmemiş — uygulama tek-cihaz (localStorage) modunda çalışıyor.");
+  }
+} catch (e) {
+  console.error("Firebase bağlanamadı, tek-cihaz moduna düşülüyor:", e);
+  FIREBASE_OK = false;
+}
+
+</script>
+
 <script>
 // ─── DATA ────────────────────────────────────────────────────────────────────
 const ADMIN_PASS = "1234";
@@ -770,11 +813,34 @@ function buildDefaultTables() {
   return list;
 }
 
-function loadTableOrders() {
-  try { const s = localStorage.getItem(TABLE_ORDERS_KEY); return s ? JSON.parse(s) : {}; }
-  catch(e) { return {}; }
+// Firebase varsa gerçek zamanlı senkron, yoksa tek-cihaz localStorage yedeği
+function initTableOrdersSync() {
+  if (FIREBASE_OK) {
+    db.ref("tableOrders").on("value", (snap) => {
+      tableOrders = snap.val() || {};
+      renderTablesScreen();
+      if (currentTableId) renderAll();
+    });
+  } else {
+    try { const s = localStorage.getItem(TABLE_ORDERS_KEY); tableOrders = s ? JSON.parse(s) : {}; }
+    catch(e) { tableOrders = {}; }
+  }
 }
-function saveTableOrdersData() { try { localStorage.setItem(TABLE_ORDERS_KEY, JSON.stringify(tableOrders)); } catch(e){} }
+function saveTableOrdersData() {
+  if (FIREBASE_OK) { db.ref("tableOrders").set(tableOrders); }
+  else { try { localStorage.setItem(TABLE_ORDERS_KEY, JSON.stringify(tableOrders)); } catch(e){} }
+}
+// Tek bir masanın sırasını yaz (diğer masalara dokunmadan, çakışmayı önler)
+function saveSingleTableOrder(tableId, orderObj) {
+  if (FIREBASE_OK) {
+    if (orderObj === null) db.ref("tableOrders/" + tableId).remove();
+    else db.ref("tableOrders/" + tableId).set(orderObj);
+  } else {
+    if (orderObj === null) delete tableOrders[tableId];
+    else tableOrders[tableId] = orderObj;
+    saveTableOrdersData();
+  }
+}
 
 function tableOccupancy(id) {
   const order = tableOrders[id];
@@ -888,20 +954,30 @@ function sendToKitchen() {
     table: currentTableId
   };
   deductStockForOrder(batch);
-  printKitchenTicket(batch);
 
-  if (!tableOrders[currentTableId]) tableOrders[currentTableId] = { items: [], startedAt: now.getTime() };
+  // Mutfak fişi: Firebase varsa mutfak ekranı otomatik yazdırır, yoksa bu cihaz kendi yazdırır
+  if (FIREBASE_OK) {
+    db.ref("kitchenTickets").push({ ...batch, printed: false });
+  } else {
+    printKitchenTicket(batch);
+  }
+
+  // Masanın birikmiş siparişini güncelle (Firebase varsa oradan, yoksa yerelden)
+  const existingOrder = tableOrders[currentTableId] || { items: [], startedAt: now.getTime() };
+  const newItems = existingOrder.items.map(x => ({ ...x }));
   batch.items.forEach(bi => {
-    const existing = tableOrders[currentTableId].items.find(x => x.name===bi.name && x.size===bi.size && x.price===bi.price);
+    const existing = newItems.find(x => x.name===bi.name && x.size===bi.size && x.price===bi.price);
     if (existing) existing.qty += bi.qty;
-    else tableOrders[currentTableId].items.push({ ...bi });
+    else newItems.push({ ...bi });
   });
-  saveTableOrdersData();
+  const updatedOrder = { items: newItems, startedAt: existingOrder.startedAt };
+  tableOrders[currentTableId] = updatedOrder; // optimistic local update
+  saveSingleTableOrder(currentTableId, updatedOrder);
 
   cart = [];
   closeMobileSheet();
   renderAll();
-  toast("Mutfağa gönderildi 🍳");
+  toast(FIREBASE_OK ? "Mutfağa gönderildi 🍳" : "Mutfağa gönderildi 🍳 (tek cihaz modu)");
 }
 
 // Masanın tüm açık siparişini kapat, rapora kaydet, masayı boşalt
@@ -919,8 +995,8 @@ function payTable() {
     table: currentTableId
   };
   saveOrderToHistory(finalOrder);
-  delete tableOrders[currentTableId];
-  saveTableOrdersData();
+  delete tableOrders[currentTableId]; // optimistic local update
+  saveSingleTableOrder(currentTableId, null);
   toast(`${currentTableId} ödendi ✅`);
   currentTableId = null;
   document.getElementById("app-shell").style.display = "none";
@@ -1051,23 +1127,38 @@ function printKitchenTicket(order) {
 
 // ─── ORDER HISTORY ───────────────────────────────────────────────────────────
 const HISTORY_KEY = "kahve_order_history_v1";
+let orderHistoryCache = [];
 
+function initOrderHistorySync() {
+  if (FIREBASE_OK) {
+    db.ref("orderHistory").on("value", (snap) => {
+      const val = snap.val() || {};
+      // Firebase objelerini diziye çevir, en yeni en üstte
+      orderHistoryCache = Object.values(val).sort((a,b) => (b._ts||0) - (a._ts||0));
+    });
+  } else {
+    try {
+      const saved = localStorage.getItem(HISTORY_KEY);
+      orderHistoryCache = saved ? JSON.parse(saved) : [];
+    } catch(e) { orderHistoryCache = []; }
+  }
+}
 function loadOrderHistory() {
-  try {
-    const saved = localStorage.getItem(HISTORY_KEY);
-    return saved ? JSON.parse(saved) : [];
-  } catch (e) { return []; }
+  return orderHistoryCache;
 }
 function saveOrderToHistory(order) {
-  try {
-    const history = loadOrderHistory();
-    history.unshift(order);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  } catch (e) { console.error("Geçmiş kaydedilemedi", e); }
+  if (FIREBASE_OK) {
+    db.ref("orderHistory").push(order);
+  } else {
+    orderHistoryCache.unshift(order);
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(orderHistoryCache)); }
+    catch (e) { console.error("Geçmiş kaydedilemedi", e); }
+  }
 }
 function clearOrderHistory() {
   if (!confirm("Tüm sipariş geçmişi silinsin mi?")) return;
-  localStorage.removeItem(HISTORY_KEY);
+  if (FIREBASE_OK) { db.ref("orderHistory").remove(); }
+  else { orderHistoryCache = []; localStorage.removeItem(HISTORY_KEY); }
   renderHistoryPanel();
   toast("Geçmiş temizlendi");
 }
@@ -1896,8 +1987,49 @@ function renderStockTab() {
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 tables = buildDefaultTables();
-tableOrders = loadTableOrders();
-renderTablesScreen();
+initTableOrdersSync();
+initOrderHistorySync();
+
+// Mutfak ekranı modu: kroki tabletinde ?kitchen=1 ile aç
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get("kitchen") === "1") {
+  initKitchenDisplay();
+} else {
+  renderTablesScreen();
+}
+
+function addKitchenLogRow(ticket) {
+  const log = document.getElementById("kitchen-log");
+  if (!log) return;
+  const itemsText = ticket.items.map(it => `${it.qty}x ${it.name}${it.size?" ("+it.size+")":""}`).join(", ");
+  const row = document.createElement("div");
+  row.style.cssText = "background:#1a0f07;border:1px solid #3a2a1a;border-radius:10px;padding:12px 14px;margin-bottom:8px;font-size:13px";
+  row.innerHTML = `<div style="font-weight:700;color:#c8742a;margin-bottom:4px">🪑 ${ticket.table || "?"} — ${ticket.time || ""}</div><div style="color:#f5efe5">${itemsText}</div>`;
+  log.insertBefore(row, log.firstChild);
+}
+
+function initKitchenDisplay() {
+  document.getElementById("tables-screen").style.display = "none";
+  document.getElementById("kitchen-screen").style.display = "block";
+  const statusEl = document.getElementById("kitchen-status");
+
+  if (!FIREBASE_OK) {
+    statusEl.textContent = "⚠️ Firebase bağlı değil — mutfak ekranı çalışamaz. Firebase config'i tamamla.";
+    statusEl.style.color = "#e05050";
+    return;
+  }
+
+  statusEl.textContent = "✅ Bağlı — yeni siparişler bekleniyor...";
+  statusEl.style.color = "#5aa86a";
+
+  db.ref("kitchenTickets").on("child_added", (snap) => {
+    const ticket = snap.val();
+    if (!ticket || ticket.printed) return;
+    printKitchenTicket(ticket);
+    addKitchenLogRow(ticket);
+    db.ref("kitchenTickets/" + snap.key + "/printed").set(true);
+  });
+}
 </script>
 </body>
 </html>
