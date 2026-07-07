@@ -949,9 +949,10 @@ function sendToKitchen() {
     id: Date.now(),
     _ts: now.getTime(),
     time: now.toLocaleString("tr-TR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" }),
-    items: cart.map(c => ({ name:c.name, size:c.size, price:c.price, qty:c.qty, icon:c.icon, catKey:c.catKey })),
+    items: cart.map(c => ({ name:c.name, size:c.size, price:c.price, qty:c.qty, icon:c.icon, catKey:c.catKey, note:c.note||"" })),
     total: getTotal(),
-    table: currentTableId
+    table: currentTableId,
+    type: "kitchen"
   };
   deductStockForOrder(batch);
 
@@ -963,10 +964,11 @@ function sendToKitchen() {
   }
 
   // Masanın birikmiş siparişini güncelle (Firebase varsa oradan, yoksa yerelden)
+  // Not farklıysa aynı üründen bile olsa ayrı satır olarak eklenir
   const existingOrder = tableOrders[currentTableId] || { items: [], startedAt: now.getTime() };
   const newItems = existingOrder.items.map(x => ({ ...x }));
   batch.items.forEach(bi => {
-    const existing = newItems.find(x => x.name===bi.name && x.size===bi.size && x.price===bi.price);
+    const existing = newItems.find(x => x.name===bi.name && x.size===bi.size && x.price===bi.price && (x.note||"")===(bi.note||""));
     if (existing) existing.qty += bi.qty;
     else newItems.push({ ...bi });
   });
@@ -980,7 +982,7 @@ function sendToKitchen() {
   toast(FIREBASE_OK ? "Mutfağa gönderildi 🍳" : "Mutfağa gönderildi 🍳 (tek cihaz modu)");
 }
 
-// Masanın tüm açık siparişini kapat, rapora kaydet, masayı boşalt
+// Masanın tüm açık siparişini kapat, rapora kaydet, masayı boşalt, ödeme fişi yazdır
 function payTable() {
   if (cart.length > 0) { toast("Önce mutfağa gönder"); return; }
   const order = tableOrders[currentTableId];
@@ -992,9 +994,18 @@ function payTable() {
     time: now.toLocaleString("tr-TR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" }),
     items: order.items,
     total: order.items.reduce((s,it)=>s+it.price*it.qty,0),
-    table: currentTableId
+    table: currentTableId,
+    type: "receipt"
   };
   saveOrderToHistory(finalOrder);
+
+  // Ödeme fişi: Firebase varsa mutfak/kasa ekranı otomatik yazdırır, yoksa bu cihaz kendi yazdırır
+  if (FIREBASE_OK) {
+    db.ref("kitchenTickets").push({ ...finalOrder, printed: false });
+  } else {
+    printKitchenTicket(finalOrder);
+  }
+
   delete tableOrders[currentTableId]; // optimistic local update
   saveSingleTableOrder(currentTableId, null);
   toast(`${currentTableId} ödendi ✅`);
@@ -1025,7 +1036,7 @@ function addToCart(catKey, name, size, price, icon) {
   const id = cid(catKey, name, size);
   const ex = cart.find(c => c.id === id);
   if (ex) ex.qty++;
-  else cart.push({ id, name, size, price, catKey, icon: icon||"", qty:1 });
+  else cart.push({ id, name, size, price, catKey, icon: icon||"", qty:1, note:"" });
   renderAll();
 }
 function removeOne(id) {
@@ -1033,6 +1044,14 @@ function removeOne(id) {
   if (!ex) return;
   if (ex.qty === 1) cart = cart.filter(c => c.id !== id);
   else ex.qty--;
+  renderAll();
+}
+function promptItemNote(id) {
+  const item = cart.find(c => c.id === id);
+  if (!item) return;
+  const note = prompt("Not ekle (örn: az şekerli, buzsuz):", item.note || "");
+  if (note === null) return;
+  item.note = note.trim();
   renderAll();
 }
 function confirmOrder() {
@@ -1056,12 +1075,16 @@ function confirmOrder() {
 
 // ─── KITCHEN TICKET PRINTING (80mm thermal) ─────────────────────────────────
 function printKitchenTicket(order) {
+  const isReceipt = order.type === "receipt";
+
   const itemsHTML = order.items.map(it => `
     <div class="t-item">
       <div class="t-item-qty">${it.qty}x</div>
       <div class="t-item-name">
         ${it.name}${it.size ? ` <span class="t-item-size">(${it.size})</span>` : ""}
+        ${it.note ? `<div class="t-item-note">📝 ${it.note}</div>` : ""}
       </div>
+      ${isReceipt ? `<div class="t-item-price">${it.price * it.qty}₺</div>` : ""}
     </div>`).join("");
 
   const ticketHTML = `
@@ -1069,7 +1092,7 @@ function printKitchenTicket(order) {
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<title>Mutfak Fişi</title>
+<title>${isReceipt ? "Ödeme Fişi" : "Mutfak Fişi"}</title>
 <style>
   @page { size: 80mm auto; margin: 0; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1095,6 +1118,9 @@ function printKitchenTicket(order) {
     font-size: 13pt; font-weight: 600; line-height: 1.3; flex: 1;
   }
   .t-item-size { font-size: 10pt; font-weight: 400; }
+  .t-item-note { font-size: 9pt; font-weight: 400; font-style: italic; color: #333; margin-top: 1.5mm; }
+  .t-item-price { font-size: 11pt; font-weight: 700; white-space: nowrap; }
+  .t-total-row { display:flex; justify-content:space-between; font-size:14pt; font-weight:700; margin-top:2mm; }
   .t-footer { text-align: center; margin-top: 4mm; font-size: 9pt; }
   @media print {
     body { width: 80mm; }
@@ -1103,7 +1129,7 @@ function printKitchenTicket(order) {
 </head>
 <body>
   <div class="t-header">
-    <div class="t-title">🍹 BAR FİŞİ</div>
+    <div class="t-title">${isReceipt ? "🧾 ÖDEME FİŞİ" : "🍹 BAR FİŞİ"}</div>
     ${order.table ? `<div class="t-sub" style="font-size:13pt;font-weight:700;margin:2px 0">${order.table}</div>` : ""}
     <div class="t-sub">${order.time}</div>
   </div>
@@ -1115,7 +1141,10 @@ function printKitchenTicket(order) {
   <div class="t-divider"></div>
   ${itemsHTML}
   <div class="t-divider"></div>
-  <div class="t-footer">Toplam ${order.items.reduce((s,it)=>s+it.qty,0)} ürün</div>
+  ${isReceipt
+    ? `<div class="t-total-row"><span>TOPLAM</span><span>${order.total}₺</span></div><div class="t-footer" style="margin-top:3mm">✅ Ödendi — Teşekkürler!</div>`
+    : `<div class="t-footer">Toplam ${order.items.reduce((s,it)=>s+it.qty,0)} ürün</div>`
+  }
 </body>
 </html>`;
 
@@ -1324,16 +1353,23 @@ function buildCartRowsHTML() {
   return cart.map(c => {
     const icon = c.icon || (menuData[c.catKey]?.icon||"");
     const esc = c.name.replace(/'/g,"\\'");
-    return `<div class="order-row">
-      <div>
-        <div class="order-row-name">${icon} ${c.name}${c.size?" ("+c.size+")":""}</div>
-        <div class="order-row-price">${c.price}₺ × ${c.qty}</div>
+    return `<div class="order-row" style="flex-direction:column;align-items:stretch;gap:6px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div class="order-row-name">${icon} ${c.name}${c.size?" ("+c.size+")":""}</div>
+          <div class="order-row-price">${c.price}₺ × ${c.qty}</div>
+          ${c.note ? `<div style="font-size:11px;color:#c8742a;font-style:italic;margin-top:2px">📝 ${c.note}</div>` : ""}
+        </div>
+        <div style="display:flex;align-items:center;gap:7px">
+          <button class="qty-btn" onclick="removeOne('${c.id}')">−</button>
+          <span style="font-family:monospace;font-weight:700;min-width:14px;text-align:center">${c.qty}</span>
+          <button class="qty-btn" onclick="addToCart('${c.catKey}','${esc}','${c.size||""}',${c.price},'${c.icon||""}')">+</button>
+        </div>
       </div>
-      <div style="display:flex;align-items:center;gap:7px">
-        <button class="qty-btn" onclick="removeOne('${c.id}')">−</button>
-        <span style="font-family:monospace;font-weight:700;min-width:14px;text-align:center">${c.qty}</span>
-        <button class="qty-btn" onclick="addToCart('${c.catKey}','${esc}','${c.size||""}',${c.price},'${c.icon||""}')">+</button>
-      </div></div>`;
+      <button onclick="promptItemNote('${c.id}')" style="align-self:flex-start;background:none;border:1px dashed #ddd2c2;border-radius:7px;padding:3px 9px;font-size:11px;color:#8a7866">
+        ${c.note ? "📝 Notu düzenle" : "+ Not ekle"}
+      </button>
+    </div>`;
   }).join("");
 }
 
@@ -1346,6 +1382,7 @@ function buildSentItemsHTML() {
       <div>
         <div class="order-row-name">${icon} ${it.name}${it.size?" ("+it.size+")":""}</div>
         <div class="order-row-price">${it.price}₺ × ${it.qty}</div>
+        ${it.note ? `<div style="font-size:11px;color:#c8742a;font-style:italic;margin-top:2px">📝 ${it.note}</div>` : ""}
       </div>
       <div style="font-size:11px;color:#5aa86a;font-weight:700">🍳 gönderildi</div>
     </div>`;
@@ -2019,10 +2056,11 @@ if (urlParams.get("kitchen") === "1") {
 function addKitchenLogRow(ticket) {
   const log = document.getElementById("kitchen-log");
   if (!log) return;
-  const itemsText = ticket.items.map(it => `${it.qty}x ${it.name}${it.size?" ("+it.size+")":""}`).join(", ");
+  const isReceipt = ticket.type === "receipt";
+  const itemsText = ticket.items.map(it => `${it.qty}x ${it.name}${it.size?" ("+it.size+")":""}${it.note?` <span style="color:#c8742a;font-style:italic">— ${it.note}</span>`:""}`).join("<br>");
   const row = document.createElement("div");
-  row.style.cssText = "background:#1a0f07;border:1px solid #3a2a1a;border-radius:10px;padding:12px 14px;margin-bottom:8px;font-size:13px";
-  row.innerHTML = `<div style="font-weight:700;color:#c8742a;margin-bottom:4px">🪑 ${ticket.table || "?"} — ${ticket.time || ""}</div><div style="color:#f5efe5">${itemsText}</div>`;
+  row.style.cssText = `background:#1a0f07;border:1px solid ${isReceipt?"#5aa86a":"#3a2a1a"};border-radius:10px;padding:12px 14px;margin-bottom:8px;font-size:13px`;
+  row.innerHTML = `<div style="font-weight:700;color:${isReceipt?"#5aa86a":"#c8742a"};margin-bottom:4px">${isReceipt?"🧾 ÖDEME":"🍳 SİPARİŞ"} · ${ticket.table || "?"} — ${ticket.time || ""}</div><div style="color:#f5efe5;line-height:1.6">${itemsText}</div>${isReceipt?`<div style="color:#5aa86a;font-weight:700;margin-top:6px">Toplam: ${ticket.total}₺</div>`:""}`;
   log.insertBefore(row, log.firstChild);
 }
 
