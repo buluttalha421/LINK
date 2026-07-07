@@ -1056,9 +1056,6 @@ function confirmOrder() {
 
 // ─── KITCHEN TICKET PRINTING (80mm thermal) ─────────────────────────────────
 function printKitchenTicket(order) {
-  const win = window.open("", "_blank", "width=400,height=600");
-  if (!win) { toast("⚠️ Yazdırma penceresi açılamadı (pop-up engellendi olabilir)"); return; }
-
   const itemsHTML = order.items.map(it => `
     <div class="t-item">
       <div class="t-item-qty">${it.qty}x</div>
@@ -1067,7 +1064,7 @@ function printKitchenTicket(order) {
       </div>
     </div>`).join("");
 
-  win.document.write(`
+  const ticketHTML = `
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -1120,9 +1117,30 @@ function printKitchenTicket(order) {
   <div class="t-divider"></div>
   <div class="t-footer">Toplam ${order.items.reduce((s,it)=>s+it.qty,0)} ürün</div>
 </body>
-</html>`);
-  win.document.close();
-  setTimeout(() => { try { win.focus(); win.print(); } catch(e){} }, 500);
+</html>`;
+
+  // window.open yerine gizli iframe kullanıyoruz — pop-up engelleyiciye takılmaz,
+  // otomatik tetiklenen (Firebase listener gibi) yazdırmalarda da sorunsuz çalışır.
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed; right:0; bottom:0; width:0; height:0; border:0; visibility:hidden;";
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow.document;
+  doc.open();
+  doc.write(ticketHTML);
+  doc.close();
+
+  const cleanup = () => { try { document.body.removeChild(iframe); } catch(e){} };
+  iframe.contentWindow.onafterprint = cleanup;
+
+  setTimeout(() => {
+    try {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+    } catch(e) { console.error("Yazdırma hatası:", e); }
+    // Bazı tarayıcılarda onafterprint tetiklenmeyebilir, yedek olarak temizle
+    setTimeout(cleanup, 2000);
+  }, 300);
 }
 
 // ─── ORDER HISTORY ───────────────────────────────────────────────────────────
