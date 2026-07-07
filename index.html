@@ -390,6 +390,7 @@ input, select { font-family: inherit; }
       <div class="header-title">🍽️ Masalar</div>
     </div>
     <div class="header-right">
+      <button class="admin-btn" onclick="window.location.href='?qr=1'" title="QR Kodları">📱</button>
       <button class="admin-btn" onclick="openReport()" title="Günlük Rapor">📊</button>
       <button class="admin-btn" onclick="openHistory()" title="Sipariş Geçmişi">📜</button>
       <button class="admin-btn" onclick="openAdmin()" title="Yönetim">⚙️</button>
@@ -499,6 +500,31 @@ input, select { font-family: inherit; }
     <div id="kitchen-status" style="font-size:13px; color:#8a7866; margin-top:6px">Bağlanıyor...</div>
   </div>
   <div id="kitchen-log" style="max-width:500px; margin:0 auto"></div>
+</div>
+
+<!-- MÜŞTERİ MENÜSÜ (QR ile açılır: ?menu=MasaAdı veya ?menu=1) — sadece görüntüleme, sipariş yok -->
+<div id="customer-menu-screen" style="display:none; min-height:100vh; background:#fff">
+  <div class="header" style="flex-direction:column; align-items:center; text-align:center; padding:24px 20px 16px; position:sticky; top:0">
+    <div class="header-sub">specialty coffee</div>
+    <div class="header-title" style="font-size:26px; margin-top:2px">☕ Menümüz</div>
+    <div id="cust-table-label" style="font-size:13px; color:#8a7866; margin-top:6px; font-weight:700"></div>
+  </div>
+  <div class="cat-bar" id="cust-cat-bar" style="position:static; box-shadow:none"></div>
+  <div class="alpha-bar" id="cust-alpha-bar" style="position:static"></div>
+  <div id="cust-main-content"></div>
+  <div style="text-align:center; padding:30px 20px 40px; color:#c2b6a6; font-size:12px; letter-spacing:1px">
+    🌿 Afiyet olsun — siparişiniz için lütfen personelimizle iletişime geçin
+  </div>
+</div>
+
+<!-- QR KOD SAYFASI (personel için: ?qr=1) — yazdırıp masalara yapıştırmak için -->
+<div id="qr-screen" style="display:none; min-height:100vh; background:#faf8f5; padding:24px">
+  <div style="text-align:center; margin-bottom:24px">
+    <div class="header-sub">specialty coffee</div>
+    <div class="header-title" style="font-size:22px">📱 QR Menü Kodları</div>
+    <div style="font-size:12px; color:#8a7866; margin-top:6px">Yazdırıp ilgili masaya yapıştırabilirsin</div>
+  </div>
+  <div id="qr-grid" style="max-width:1000px; margin:0 auto"></div>
 </div>
 
 <!-- Firebase SDK (compat, CDN üzerinden — internet bağlantısı gerekir) -->
@@ -2045,12 +2071,118 @@ tables = buildDefaultTables();
 initTableOrdersSync();
 initOrderHistorySync();
 
-// Mutfak ekranı modu: kroki tabletinde ?kitchen=1 ile aç
+// URL moduna göre doğru ekranı aç:
+//  ?kitchen=1  → mutfak ekranı (otomatik yazdırma)
+//  ?menu=X     → müşteri menüsü (QR ile, sadece görüntüleme)
+//  ?qr=1       → personel için QR kod sayfası
 const urlParams = new URLSearchParams(window.location.search);
+const menuParam = urlParams.get("menu");
 if (urlParams.get("kitchen") === "1") {
   initKitchenDisplay();
+} else if (menuParam !== null) {
+  initCustomerMenu(menuParam);
+} else if (urlParams.get("qr") === "1") {
+  initQRScreen();
 } else {
   renderTablesScreen();
+}
+
+// ─── MÜŞTERİ MENÜSÜ (QR — sadece görüntüleme) ───────────────────────────────
+let custActiveCat = "hot";
+let custActiveLetter = "ALL";
+
+function initCustomerMenu(tableLabel) {
+  document.getElementById("tables-screen").style.display = "none";
+  document.getElementById("customer-menu-screen").style.display = "block";
+  const labelEl = document.getElementById("cust-table-label");
+  labelEl.textContent = (tableLabel && tableLabel !== "1") ? "🪑 " + tableLabel : "";
+  custActiveCat = "hot"; custActiveLetter = "ALL";
+  renderCustomerMenu();
+}
+
+function renderCustomerMenu() {
+  renderCustCatBar();
+  renderCustAlphaBar();
+  renderCustGrid();
+}
+function switchCustCat(key) { custActiveCat = key; custActiveLetter = "ALL"; renderCustCatBar(); renderCustAlphaBar(); renderCustGrid(); }
+function switchCustLetter(l) { custActiveLetter = l; renderCustAlphaBar(); renderCustGrid(); }
+
+function renderCustCatBar() {
+  const bar = document.getElementById("cust-cat-bar");
+  bar.innerHTML = catOrder.filter(k => k !== "promo").map(key => {
+    const cat = menuData[key]; const a = custActiveCat === key;
+    return `<button class="cat-btn" style="${a?`background:${cat.color};border-color:${cat.color};color:#fff`:""}"
+      onclick="switchCustCat('${key}')">${cat.icon} ${cat.label}</button>`;
+  }).join("");
+}
+function renderCustAlphaBar() {
+  const bar = document.getElementById("cust-alpha-bar");
+  const items = menuData[custActiveCat]?.items || [];
+  const color = menuData[custActiveCat]?.color || "#c8742a";
+  bar.innerHTML = getLetters(items).map(l => {
+    const a = custActiveLetter === l;
+    return `<button class="alpha-btn${l==="ALL"?" alpha-all":""}"
+      style="${a?`background:${color};color:#fff;border:none`:""}"
+      onclick="switchCustLetter('${l}')">${l}</button>`;
+  }).join("");
+}
+function renderCustGrid() {
+  const content = document.getElementById("cust-main-content");
+  const cat = menuData[custActiveCat];
+  if (!cat) { content.innerHTML = ""; return; }
+  const color = cat.color;
+  let items = cat.items;
+  if (custActiveLetter !== "ALL") items = items.filter(i => i.name[0].toLocaleUpperCase("tr-TR") === custActiveLetter);
+  let html = `<div class="grid">`;
+  items.forEach(item => {
+    const hasSizes = !!item.sizes;
+    html += `<div class="card">
+      <div class="card-shimmer" style="background:linear-gradient(90deg,transparent,${color}55,transparent)"></div>
+      <div>
+        <div class="card-letter" style="color:${color}">${item.name[0]}</div>
+        <div class="card-name">${item.name}</div>
+      </div>
+      <div class="size-btns">
+        ${hasSizes
+          ? `<div class="size-btn" style="cursor:default">B · ${item.sizes.B}₺</div><div class="size-btn" style="cursor:default">ÇB · ${item.sizes.CB}₺</div>`
+          : `<div class="size-btn" style="cursor:default">${item.price}₺</div>`
+        }
+      </div></div>`;
+  });
+  html += `</div><div style="height:24px"></div>`;
+  content.innerHTML = html;
+}
+
+// ─── QR KOD SAYFASI (personel için) ─────────────────────────────────────────
+function initQRScreen() {
+  document.getElementById("tables-screen").style.display = "none";
+  document.getElementById("qr-screen").style.display = "block";
+  renderQRScreen();
+}
+function qrTargetUrl(target) {
+  const base = window.location.origin + window.location.pathname;
+  return base + "?menu=" + encodeURIComponent(target);
+}
+function qrImgUrl(target) {
+  return "https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=" + encodeURIComponent(qrTargetUrl(target));
+}
+function renderQRScreen() {
+  const wrap = document.getElementById("qr-grid");
+  let html = `<div style="text-align:center; margin-bottom:28px; background:#fff; border:1px solid #e8e0d5; border-radius:16px; padding:20px; max-width:280px; margin-left:auto; margin-right:auto">
+    <div style="font-size:13px; color:#8a7866; margin-bottom:10px; font-weight:700">Genel Menü (masasız)</div>
+    <img src="${qrImgUrl("1")}" style="width:100%; max-width:200px">
+  </div>`;
+  const allTables = [...Object.keys(KROKI_POSITIONS), ...Object.keys(GROUP_POSITIONS)];
+  html += `<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px">`;
+  allTables.forEach(t => {
+    html += `<div style="text-align:center; border:1px solid #e8e0d5; border-radius:12px; padding:14px; background:#fff">
+      <div style="font-weight:700; margin-bottom:8px; font-family:monospace">${t}</div>
+      <img src="${qrImgUrl(t)}" style="width:100%; max-width:140px">
+    </div>`;
+  });
+  html += `</div>`;
+  wrap.innerHTML = html;
 }
 
 function addKitchenLogRow(ticket) {
