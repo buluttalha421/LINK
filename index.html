@@ -778,15 +778,18 @@ const STORAGE_KEY_ORDER = "kahve_menu_catorder_v1";
 
 function initMenuDataSync() {
   if (FIREBASE_OK) {
-    db.ref("menuData").on("value", (snap) => {
+    // Tek bir atomik kayıt: menuData ve catOrder HER ZAMAN birlikte güncellenir,
+    // asla birbirinden bağımsız/uyumsuz bir anlık görüntü oluşmaz.
+    db.ref("menuConfig").on("value", (snap) => {
       const val = snap.val();
-      if (val) { menuData = val; }
-      else { menuData = JSON.parse(JSON.stringify(defaultMenuData)); }
-      renderAllSafely();
-    });
-    db.ref("catOrder").on("value", (snap) => {
-      const val = snap.val();
-      catOrder = val || [...defaultCatOrder];
+      if (val && val.menuData && val.catOrder) {
+        menuData = val.menuData;
+        catOrder = val.catOrder;
+      } else {
+        menuData = JSON.parse(JSON.stringify(defaultMenuData));
+        catOrder = [...defaultCatOrder];
+      }
+      sanitizeCatOrder();
       renderAllSafely();
     });
   } else {
@@ -799,19 +802,30 @@ function initMenuDataSync() {
       menuData = JSON.parse(JSON.stringify(defaultMenuData));
       catOrder = [...defaultCatOrder];
     }
+    sanitizeCatOrder();
   }
+}
+
+// Güvenlik ağı: catOrder içinde menuData'da karşılığı olmayan bir anahtar varsa
+// (senkron gecikmesi, bozuk veri vb.) onu listeden çıkar — asla çökme yaşanmasın.
+function sanitizeCatOrder() {
+  if (!Array.isArray(catOrder) || !menuData) return;
+  catOrder = catOrder.filter(key => menuData[key]);
+  if (catOrder.length === 0) catOrder = Object.keys(menuData);
+  if (typeof activeCat !== "undefined" && !catOrder.includes(activeCat)) activeCat = catOrder[0];
+  if (typeof adminCat !== "undefined" && !catOrder.includes(adminCat)) adminCat = catOrder[0];
 }
 
 // Bazı ekranlar (mutfak/qr) henüz render fonksiyonlarını tanımlamamış olabilir — güvenli çağrı
 function renderAllSafely() {
-  try { if (typeof renderAll === "function" && document.getElementById("main-content")) renderAll(); } catch(e){}
-  try { if (document.getElementById("cust-main-content")?.offsetParent !== null || document.getElementById("customer-menu-screen")?.style.display === "block") renderCustomerMenu(); } catch(e){}
+  try { if (typeof renderAll === "function" && document.getElementById("main-content")) renderAll(); } catch(e){ console.error("renderAllSafely/renderAll hatası:", e); }
+  try { if (document.getElementById("cust-main-content")?.offsetParent !== null || document.getElementById("customer-menu-screen")?.style.display === "block") renderCustomerMenu(); } catch(e){ console.error("renderAllSafely/renderCustomerMenu hatası:", e); }
 }
 
 function saveMenuData() {
+  sanitizeCatOrder();
   if (FIREBASE_OK) {
-    db.ref("menuData").set(menuData);
-    db.ref("catOrder").set(catOrder);
+    db.ref("menuConfig").set({ menuData, catOrder });
   } else {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(menuData));
@@ -828,8 +842,7 @@ function resetMenuData() {
   menuData = JSON.parse(JSON.stringify(defaultMenuData));
   catOrder = [...defaultCatOrder];
   if (FIREBASE_OK) {
-    db.ref("menuData").set(menuData);
-    db.ref("catOrder").set(catOrder);
+    db.ref("menuConfig").set({ menuData, catOrder });
   } else {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(STORAGE_KEY_ORDER);
@@ -1343,7 +1356,7 @@ function closeMobileSheet() {
 
 // ─── RENDER MENU ─────────────────────────────────────────────────────────────
 function renderCatBar() {
-  document.getElementById("cat-bar").innerHTML = catOrder.map(key => {
+  document.getElementById("cat-bar").innerHTML = catOrder.filter(key => menuData[key]).map(key => {
     const cat = menuData[key]; const a = activeCat === key;
     return `<button class="cat-btn" style="${a?`background:${cat.color};border-color:${cat.color};color:#fff`:""}"
       onclick="switchCat('${key}')">${cat.icon} ${cat.label}</button>`;
@@ -1352,6 +1365,7 @@ function renderCatBar() {
 function renderAlphaBar() {
   const bar = document.getElementById("alpha-bar");
   if (activeCat === "promo") { bar.innerHTML=""; return; }
+  if (!menuData[activeCat]) { activeCat = catOrder[0]; }
   const items = menuData[activeCat].items;
   const color = menuData[activeCat].color;
   bar.innerHTML = getLetters(items).map(l => {
@@ -1363,7 +1377,9 @@ function renderAlphaBar() {
 }
 function renderGrid() {
   const content = document.getElementById("main-content");
+  if (!menuData[activeCat]) { activeCat = catOrder[0]; }
   const cat = menuData[activeCat];
+  if (!cat) { content.innerHTML = ""; return; }
   const color = cat.color;
   if (activeCat === "promo") {
     let html = `<div class="promo-hint">İçeceğine eklemek istediğin promosyonları sepetine ekle.</div><div class="promo-list">`;
@@ -2257,7 +2273,7 @@ function switchCustLetter(l) { custActiveLetter = l; renderCustAlphaBar(); rende
 
 function renderCustCatBar() {
   const bar = document.getElementById("cust-cat-bar");
-  bar.innerHTML = catOrder.filter(k => k !== "promo").map(key => {
+  bar.innerHTML = catOrder.filter(k => k !== "promo" && menuData[k]).map(key => {
     const cat = menuData[key]; const a = custActiveCat === key;
     return `<button class="cat-btn" style="${a?`background:${cat.color};border-color:${cat.color};color:#fff`:""}"
       onclick="switchCustCat('${key}')">${cat.icon} ${cat.label}</button>`;
