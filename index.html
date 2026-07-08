@@ -562,9 +562,32 @@ try {
 </script>
 
 <script>
-// ─── DATA ────────────────────────────────────────────────────────────────────
-const ADMIN_PASS = "1234";
+// ─── GÜVENLİK: Admin şifresi (localStorage'da saklanır, admin panelden değiştirilebilir) ─
+const DEFAULT_ADMIN_PASS = "1234";
+const ADMIN_PASS_KEY = "kahve_admin_pass_v1";
+function getAdminPass() {
+  try { return localStorage.getItem(ADMIN_PASS_KEY) || DEFAULT_ADMIN_PASS; }
+  catch(e) { return DEFAULT_ADMIN_PASS; }
+}
+function setAdminPass(newPass) {
+  try { localStorage.setItem(ADMIN_PASS_KEY, newPass); } catch(e){}
+}
 
+// ─── GÜVENLİK: XSS koruması ──────────────────────────────────────────────────
+// Kullanıcıdan gelen HER metin (not, isim vb.) ekrana basılmadan önce bu fonksiyondan
+// geçmeli. Aksi halde biri <script> içeren bir "not" yazarsa, Firebase üzerinden
+// diğer tüm cihazlarda (mutfak ekranı, diğer garsonlar) o kod çalışabilir.
+function escapeHTML(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// ─── DATA ────────────────────────────────────────────────────────────────────
 let defaultMenuData = {
   hot: {
     label:"Sıcak", icon:"🔥", color:"#c8742a",
@@ -968,8 +991,11 @@ function getDisplayTotal() {
 }
 
 // Yeni eklenen sepeti mutfağa gönder (masa siparişi arka planda birikir)
+let _actionLock = false;
 function sendToKitchen() {
   if (cart.length === 0) return;
+  if (_actionLock) return;
+  _actionLock = true; setTimeout(() => { _actionLock = false; }, 1200);
   const now = new Date();
   const batch = {
     id: Date.now(),
@@ -1011,8 +1037,10 @@ function sendToKitchen() {
 // Masanın tüm açık siparişini kapat, rapora kaydet, masayı boşalt, ödeme fişi yazdır
 function payTable() {
   if (cart.length > 0) { toast("Önce mutfağa gönder"); return; }
+  if (_actionLock) return;
   const order = tableOrders[currentTableId];
   if (!order || order.items.length === 0) { toast("Masada sipariş yok"); return; }
+  _actionLock = true; setTimeout(() => { _actionLock = false; }, 1200);
   const now = new Date();
   const finalOrder = {
     id: Date.now(),
@@ -1107,8 +1135,8 @@ function printKitchenTicket(order) {
     <div class="t-item">
       <div class="t-item-qty">${it.qty}x</div>
       <div class="t-item-name">
-        ${it.name}${it.size ? ` <span class="t-item-size">(${it.size})</span>` : ""}
-        ${it.note ? `<div class="t-item-note">📝 ${it.note}</div>` : ""}
+        ${escapeHTML(it.name)}${it.size ? ` <span class="t-item-size">(${escapeHTML(it.size)})</span>` : ""}
+        ${it.note ? `<div class="t-item-note">📝 ${escapeHTML(it.note)}</div>` : ""}
       </div>
       ${isReceipt ? `<div class="t-item-price">${it.price * it.qty}₺</div>` : ""}
     </div>`).join("");
@@ -1156,7 +1184,7 @@ function printKitchenTicket(order) {
 <body>
   <div class="t-header">
     <div class="t-title">${isReceipt ? "🧾 ÖDEME FİŞİ" : "🍹 BAR FİŞİ"}</div>
-    ${order.table ? `<div class="t-sub" style="font-size:13pt;font-weight:700;margin:2px 0">${order.table}</div>` : ""}
+    ${order.table ? `<div class="t-sub" style="font-size:13pt;font-weight:700;margin:2px 0">${escapeHTML(order.table)}</div>` : ""}
     <div class="t-sub">${order.time}</div>
   </div>
   <div class="t-divider"></div>
@@ -1378,13 +1406,13 @@ function buildCartRowsHTML() {
   }
   return cart.map(c => {
     const icon = c.icon || (menuData[c.catKey]?.icon||"");
-    const esc = c.name.replace(/'/g,"\\'");
+    const esc = c.name.replace(/'/g,"\\'").replace(/"/g,"&quot;");
     return `<div class="order-row" style="flex-direction:column;align-items:stretch;gap:6px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div>
-          <div class="order-row-name">${icon} ${c.name}${c.size?" ("+c.size+")":""}</div>
+          <div class="order-row-name">${icon} ${escapeHTML(c.name)}${c.size?" ("+escapeHTML(c.size)+")":""}</div>
           <div class="order-row-price">${c.price}₺ × ${c.qty}</div>
-          ${c.note ? `<div style="font-size:11px;color:#c8742a;font-style:italic;margin-top:2px">📝 ${c.note}</div>` : ""}
+          ${c.note ? `<div style="font-size:11px;color:#c8742a;font-style:italic;margin-top:2px">📝 ${escapeHTML(c.note)}</div>` : ""}
         </div>
         <div style="display:flex;align-items:center;gap:7px">
           <button class="qty-btn" onclick="removeOne('${c.id}')">−</button>
@@ -1406,9 +1434,9 @@ function buildSentItemsHTML() {
     const icon = it.icon || (menuData[it.catKey]?.icon||"");
     return `<div class="order-row" style="opacity:0.75">
       <div>
-        <div class="order-row-name">${icon} ${it.name}${it.size?" ("+it.size+")":""}</div>
+        <div class="order-row-name">${icon} ${escapeHTML(it.name)}${it.size?" ("+escapeHTML(it.size)+")":""}</div>
         <div class="order-row-price">${it.price}₺ × ${it.qty}</div>
-        ${it.note ? `<div style="font-size:11px;color:#c8742a;font-style:italic;margin-top:2px">📝 ${it.note}</div>` : ""}
+        ${it.note ? `<div style="font-size:11px;color:#c8742a;font-style:italic;margin-top:2px">📝 ${escapeHTML(it.note)}</div>` : ""}
       </div>
       <div style="font-size:11px;color:#5aa86a;font-weight:700">🍳 gönderildi</div>
     </div>`;
@@ -1474,25 +1502,57 @@ function switchLetter(l) { activeLetter=l; renderAlphaBar(); renderGrid(); }
 
 // ─── ADMIN ───────────────────────────────────────────────────────────────────
 let adminUnlocked = false;
+const LOGIN_ATTEMPTS_KEY = "kahve_login_attempts_v1";
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MS = 60000; // 1 dakika
+
+function getLoginAttempts() {
+  try { return JSON.parse(localStorage.getItem(LOGIN_ATTEMPTS_KEY) || '{"count":0,"lockedUntil":0}'); }
+  catch(e) { return { count:0, lockedUntil:0 }; }
+}
+function setLoginAttempts(data) {
+  try { localStorage.setItem(LOGIN_ATTEMPTS_KEY, JSON.stringify(data)); } catch(e){}
+}
 
 function openAdmin() {
   if (adminUnlocked) { showAdminPanel(); return; }
   const overlay = document.getElementById("admin-overlay");
   overlay.style.display = "flex";
+  const attempts = getLoginAttempts();
+  const isLocked = attempts.lockedUntil > Date.now();
   overlay.innerHTML = `<div class="login-box">
     <h2>⚙️ Yönetim</h2>
-    <p>Devam etmek için şifre girin</p>
-    <input class="login-input" type="password" id="admin-pass" placeholder="••••" onkeydown="if(event.key==='Enter')checkPass()">
-    <button class="login-btn" onclick="checkPass()">Giriş</button>
+    <p>${isLocked ? "🔒 Çok fazla yanlış deneme — biraz bekle" : "Devam etmek için şifre girin"}</p>
+    <input class="login-input" type="password" id="admin-pass" placeholder="••••" ${isLocked?"disabled":""} onkeydown="if(event.key==='Enter')checkPass()">
+    <button class="login-btn" onclick="checkPass()" ${isLocked?"disabled style='opacity:0.5'":""}>Giriş</button>
     <div class="login-error" id="login-error"></div>
     <button onclick="closeAdminOverlay()" style="margin-top:12px;background:none;border:none;color:#8a7866;font-size:13px">İptal</button>
   </div>`;
   setTimeout(() => document.getElementById("admin-pass")?.focus(), 100);
 }
 function checkPass() {
+  const attempts = getLoginAttempts();
+  if (attempts.lockedUntil > Date.now()) {
+    const secondsLeft = Math.ceil((attempts.lockedUntil - Date.now())/1000);
+    document.getElementById("login-error").textContent = `🔒 ${secondsLeft} saniye sonra tekrar dene`;
+    return;
+  }
   const val = document.getElementById("admin-pass").value;
-  if (val === ADMIN_PASS) { adminUnlocked = true; showAdminPanel(); }
-  else { document.getElementById("login-error").textContent = "Şifre yanlış"; }
+  if (val === getAdminPass()) {
+    setLoginAttempts({ count:0, lockedUntil:0 });
+    adminUnlocked = true;
+    showAdminPanel();
+  } else {
+    const newCount = (attempts.count || 0) + 1;
+    if (newCount >= MAX_ATTEMPTS) {
+      setLoginAttempts({ count:0, lockedUntil: Date.now() + LOCKOUT_MS });
+      document.getElementById("login-error").textContent = "🔒 Çok fazla hatalı deneme, 60 saniye kilitlendi";
+      document.getElementById("admin-pass").disabled = true;
+    } else {
+      setLoginAttempts({ count:newCount, lockedUntil:0 });
+      document.getElementById("login-error").textContent = `Şifre yanlış (${MAX_ATTEMPTS-newCount} deneme hakkı kaldı)`;
+    }
+  }
 }
 function closeAdminOverlay() { document.getElementById("admin-overlay").style.display = "none"; }
 function showAdminPanel() {
@@ -1516,8 +1576,9 @@ function renderAdminPanel() {
         <button class="admin-tab${adminTab==="items"?" active":""}" onclick="setAdminTab('items')">Ürünler</button>
         <button class="admin-tab${adminTab==="categories"?" active":""}" onclick="setAdminTab('categories')">Kategoriler</button>
         <button class="admin-tab${adminTab==="stock"?" active":""}" onclick="setAdminTab('stock')">📦 Stok</button>
+        <button class="admin-tab${adminTab==="security"?" active":""}" onclick="setAdminTab('security')">🔒 Güvenlik</button>
       </div>
-      ${adminTab==="items" ? renderItemsTab() : adminTab==="categories" ? renderCategoriesTab() : renderStockTab()}
+      ${adminTab==="items" ? renderItemsTab() : adminTab==="categories" ? renderCategoriesTab() : adminTab==="stock" ? renderStockTab() : renderSecurityTab()}
     </div>
   </div>`;
 }
@@ -1996,6 +2057,46 @@ function resetStock() {
   toast("Stok sıfırlandı"); renderAdminPanel();
 }
 
+function changeAdminPassword() {
+  const cur = document.getElementById("sec-current-pass")?.value || "";
+  const next = document.getElementById("sec-new-pass")?.value || "";
+  const confirm2 = document.getElementById("sec-confirm-pass")?.value || "";
+  if (cur !== getAdminPass()) { toast("Mevcut şifre yanlış"); return; }
+  if (next.length < 4) { toast("Yeni şifre en az 4 karakter olmalı"); return; }
+  if (next !== confirm2) { toast("Yeni şifreler eşleşmiyor"); return; }
+  setAdminPass(next);
+  toast("Şifre değiştirildi ✓");
+  renderAdminPanel();
+}
+
+function renderSecurityTab() {
+  const usingDefault = getAdminPass() === DEFAULT_ADMIN_PASS;
+  return `
+    ${usingDefault ? `<div style="background:#fff0f0;border:1px solid #ffc8c8;border-radius:12px;padding:12px 16px;margin-bottom:18px;font-size:13px;color:#e05050;font-weight:600">
+      ⚠️ Hâlâ varsayılan şifreyi (1234) kullanıyorsun. Değiştirmen önerilir.
+    </div>` : `<div style="background:#e8f5e9;border:1px solid #b2dfdb;border-radius:12px;padding:10px 16px;margin-bottom:18px;font-size:13px;color:#2e7d52;font-weight:600">
+      ✅ Şifre özelleştirilmiş
+    </div>`}
+
+    <div class="admin-section">
+      <h3>Yönetim Şifresini Değiştir</h3>
+      <div class="admin-row" style="flex-direction:column;align-items:stretch;gap:8px">
+        <input class="admin-input" id="sec-current-pass" type="password" placeholder="Mevcut şifre">
+        <input class="admin-input" id="sec-new-pass" type="password" placeholder="Yeni şifre (en az 4 karakter)">
+        <input class="admin-input" id="sec-confirm-pass" type="password" placeholder="Yeni şifre (tekrar)">
+        <button class="admin-save-btn" onclick="changeAdminPassword()">Şifreyi Güncelle</button>
+      </div>
+    </div>
+
+    <div class="admin-section" style="background:#faf8f5;border:1px solid #e8e0d5;border-radius:12px;padding:14px 16px;font-size:12px;color:#8a7866;line-height:1.8">
+      🛡️ <b>Bilinmesi gerekenler:</b><br>
+      • Bu şifre sadece bu cihazda geçerlidir — her cihaza ayrı ayrı şifre koyman gerekir.<br>
+      • Tarayıcı geliştirici konsoluna erişimi olan biri teorik olarak bu korumayı atlatabilir; bu, sunucu tarafı doğrulaması olmayan her istemci-taraflı korumanın doğasıdır.<br>
+      • Sipariş/masa verileri Firebase üzerinden şifresiz iletişim kurar (herkese okuma/yazma açık kuralları). Veritabanı linkini kimseyle paylaşma.<br>
+      • Kritik veriler (satış geçmişi) Firebase kurallarında "silinemez/değiştirilemez" olacak şekilde ayarlanmalı — bunun için Firebase konsolunda kuralları güncellemen gerekiyor (ayrı olarak paylaşacağım).
+    </div>`;
+}
+
 function renderStockTab() {
   const st = loadStock();
   const criticals = st.filter(s => s.qty <= s.warnAt);
@@ -2189,10 +2290,10 @@ function addKitchenLogRow(ticket) {
   const log = document.getElementById("kitchen-log");
   if (!log) return;
   const isReceipt = ticket.type === "receipt";
-  const itemsText = ticket.items.map(it => `${it.qty}x ${it.name}${it.size?" ("+it.size+")":""}${it.note?` <span style="color:#c8742a;font-style:italic">— ${it.note}</span>`:""}`).join("<br>");
+  const itemsText = ticket.items.map(it => `${it.qty}x ${escapeHTML(it.name)}${it.size?" ("+escapeHTML(it.size)+")":""}${it.note?` <span style="color:#c8742a;font-style:italic">— ${escapeHTML(it.note)}</span>`:""}`).join("<br>");
   const row = document.createElement("div");
   row.style.cssText = `background:#1a0f07;border:1px solid ${isReceipt?"#5aa86a":"#3a2a1a"};border-radius:10px;padding:12px 14px;margin-bottom:8px;font-size:13px`;
-  row.innerHTML = `<div style="font-weight:700;color:${isReceipt?"#5aa86a":"#c8742a"};margin-bottom:4px">${isReceipt?"🧾 ÖDEME":"🍳 SİPARİŞ"} · ${ticket.table || "?"} — ${ticket.time || ""}</div><div style="color:#f5efe5;line-height:1.6">${itemsText}</div>${isReceipt?`<div style="color:#5aa86a;font-weight:700;margin-top:6px">Toplam: ${ticket.total}₺</div>`:""}`;
+  row.innerHTML = `<div style="font-weight:700;color:${isReceipt?"#5aa86a":"#c8742a"};margin-bottom:4px">${isReceipt?"🧾 ÖDEME":"🍳 SİPARİŞ"} · ${escapeHTML(ticket.table || "?")} — ${escapeHTML(ticket.time || "")}</div><div style="color:#f5efe5;line-height:1.6">${itemsText}</div>${isReceipt?`<div style="color:#5aa86a;font-weight:700;margin-top:6px">Toplam: ${ticket.total}₺</div>`:""}`;
   log.insertBefore(row, log.firstChild);
 }
 
