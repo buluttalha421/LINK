@@ -772,48 +772,75 @@ let defaultMenuData = {
 let catOrder = ["hot","cold","third","dessert","drinks","snacks","food","promo"];
 let defaultCatOrder = ["hot","cold","third","dessert","drinks","snacks","food","promo"];
 
-// ─── PERSISTENCE (localStorage) ─────────────────────────────────────────────
+// ─── PERSISTENCE (Firebase varsa gerçek zamanlı ortak, yoksa localStorage) ──
 const STORAGE_KEY = "kahve_menu_data_v1";
 const STORAGE_KEY_ORDER = "kahve_menu_catorder_v1";
 
-function loadMenuData() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    const savedOrder = localStorage.getItem(STORAGE_KEY_ORDER);
-    if (saved) menuData = JSON.parse(saved);
-    else menuData = JSON.parse(JSON.stringify(defaultMenuData));
-    if (savedOrder) catOrder = JSON.parse(savedOrder);
-    else catOrder = [...defaultCatOrder];
-  } catch (e) {
-    console.error("Menü verisi yüklenemedi, varsayılana dönülüyor.", e);
-    menuData = JSON.parse(JSON.stringify(defaultMenuData));
-    catOrder = [...defaultCatOrder];
+function initMenuDataSync() {
+  if (FIREBASE_OK) {
+    db.ref("menuData").on("value", (snap) => {
+      const val = snap.val();
+      if (val) { menuData = val; }
+      else { menuData = JSON.parse(JSON.stringify(defaultMenuData)); }
+      renderAllSafely();
+    });
+    db.ref("catOrder").on("value", (snap) => {
+      const val = snap.val();
+      catOrder = val || [...defaultCatOrder];
+      renderAllSafely();
+    });
+  } else {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      const savedOrder = localStorage.getItem(STORAGE_KEY_ORDER);
+      menuData = saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(defaultMenuData));
+      catOrder = savedOrder ? JSON.parse(savedOrder) : [...defaultCatOrder];
+    } catch (e) {
+      menuData = JSON.parse(JSON.stringify(defaultMenuData));
+      catOrder = [...defaultCatOrder];
+    }
   }
 }
 
+// Bazı ekranlar (mutfak/qr) henüz render fonksiyonlarını tanımlamamış olabilir — güvenli çağrı
+function renderAllSafely() {
+  try { if (typeof renderAll === "function" && document.getElementById("main-content")) renderAll(); } catch(e){}
+  try { if (document.getElementById("cust-main-content")?.offsetParent !== null || document.getElementById("customer-menu-screen")?.style.display === "block") renderCustomerMenu(); } catch(e){}
+}
+
 function saveMenuData() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(menuData));
-    localStorage.setItem(STORAGE_KEY_ORDER, JSON.stringify(catOrder));
-  } catch (e) {
-    console.error("Menü verisi kaydedilemedi.", e);
-    toast("⚠️ Kaydetme hatası");
+  if (FIREBASE_OK) {
+    db.ref("menuData").set(menuData);
+    db.ref("catOrder").set(catOrder);
+  } else {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(menuData));
+      localStorage.setItem(STORAGE_KEY_ORDER, JSON.stringify(catOrder));
+    } catch (e) {
+      console.error("Menü verisi kaydedilemedi.", e);
+      toast("⚠️ Kaydetme hatası");
+    }
   }
 }
 
 function resetMenuData() {
   if (!confirm("Tüm değişiklikler silinip menü orijinal haline döndürülsün mü?")) return;
-  localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem(STORAGE_KEY_ORDER);
-  loadMenuData();
+  menuData = JSON.parse(JSON.stringify(defaultMenuData));
+  catOrder = [...defaultCatOrder];
+  if (FIREBASE_OK) {
+    db.ref("menuData").set(menuData);
+    db.ref("catOrder").set(catOrder);
+  } else {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY_ORDER);
+  }
   if (!catOrder.includes(activeCat)) activeCat = catOrder[0];
   if (!catOrder.includes(adminCat)) adminCat = catOrder[0];
   toast("Menü sıfırlandı");
   renderAll(); renderAdminPanel();
 }
 
-let menuData = {};
-loadMenuData();
+let menuData = JSON.parse(JSON.stringify(defaultMenuData));
 
 
 let activeCat = "hot";
@@ -1989,15 +2016,30 @@ const NO_COFFEE = new Set(["Chai Tea Latte","Coconut Mayo","Bitki Çayları","He
 // Süt TÜKETMEYENler (soğuk içecekler)
 const NO_MILK_COLD = new Set(["Americano","Filtre Kahve","Filtre Sütlü","Cortado","Flat White","Espresso","Cold Brew","Floyd","Gricio","Redbell","Eldorado","Forever Melon","Matrak","Pangea","Pink Dream","Mocha Monroe","Farketmez","Holosen","Limonata","Cool Acai","Cool Berry","Cool Grassias","Cool Lime","Mango Rooibos","S-Ice"]);
 
+let stockCache = JSON.parse(JSON.stringify(DEFAULT_STOCK));
+
+function initStockSync() {
+  if (FIREBASE_OK) {
+    db.ref("stock").on("value", (snap) => {
+      const val = snap.val();
+      stockCache = val || JSON.parse(JSON.stringify(DEFAULT_STOCK));
+      renderAllSafely();
+      if (document.getElementById("admin-overlay")?.style.display === "flex") renderAdminPanel();
+    });
+  } else {
+    try {
+      const s = localStorage.getItem(STOCK_KEY);
+      stockCache = s ? JSON.parse(s) : JSON.parse(JSON.stringify(DEFAULT_STOCK));
+    } catch(e) { stockCache = JSON.parse(JSON.stringify(DEFAULT_STOCK)); }
+  }
+}
 function loadStock() {
-  try {
-    const s = localStorage.getItem(STOCK_KEY);
-    if (s) return JSON.parse(s);
-    return JSON.parse(JSON.stringify(DEFAULT_STOCK));
-  } catch(e) { return JSON.parse(JSON.stringify(DEFAULT_STOCK)); }
+  return stockCache;
 }
 function saveStock(st) {
-  try { localStorage.setItem(STOCK_KEY, JSON.stringify(st)); } catch(e) {}
+  stockCache = st; // optimistic local update
+  if (FIREBASE_OK) { db.ref("stock").set(st); }
+  else { try { localStorage.setItem(STOCK_KEY, JSON.stringify(st)); } catch(e) {} }
 }
 
 function deductStockForOrder(order) {
@@ -2053,7 +2095,9 @@ function deleteStockItem(id) {
 }
 function resetStock() {
   if (!confirm("Stok orijinal değerlere döndürülsün mü?")) return;
-  localStorage.removeItem(STOCK_KEY);
+  const fresh = JSON.parse(JSON.stringify(DEFAULT_STOCK));
+  saveStock(fresh);
+  if (!FIREBASE_OK) localStorage.removeItem(STOCK_KEY);
   toast("Stok sıfırlandı"); renderAdminPanel();
 }
 
@@ -2173,6 +2217,8 @@ let custActiveLetter = "ALL";
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 tables = buildDefaultTables();
+initMenuDataSync();
+initStockSync();
 initTableOrdersSync();
 initOrderHistorySync();
 
