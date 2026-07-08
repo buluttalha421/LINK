@@ -2066,6 +2066,10 @@ function renderStockTab() {
     </div>`;
 }
 
+// ─── MÜŞTERİ MENÜSÜ (QR — sadece görüntüleme) durumu ────────────────────────
+let custActiveCat = "hot";
+let custActiveLetter = "ALL";
+
 // ─── INIT ────────────────────────────────────────────────────────────────────
 tables = buildDefaultTables();
 initTableOrdersSync();
@@ -2086,10 +2090,6 @@ if (urlParams.get("kitchen") === "1") {
 } else {
   renderTablesScreen();
 }
-
-// ─── MÜŞTERİ MENÜSÜ (QR — sadece görüntüleme) ───────────────────────────────
-let custActiveCat = "hot";
-let custActiveLetter = "ALL";
 
 function initCustomerMenu(tableLabel) {
   document.getElementById("tables-screen").style.display = "none";
