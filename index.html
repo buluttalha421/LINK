@@ -397,25 +397,28 @@ input, select { font-family: inherit; }
 <script>
   // Sayfada HERHANGİ bir JS hatası oluşursa (nerede olursa olsun) ekranda göster.
   // Bu sayede "bozuldu" dendiğinde tahmin etmek yerine gerçek hatayı görebiliriz.
+  // NOT: innerHTML yerine textContent/DOM node ekleme kullanıyoruz — hata mesajı
+  // içeriği (dosya adı, satır no, exception mesajı) teorik olarak saldırgan
+  // kontrollü olabileceğinden, burada da XSS'e karşı güvenli olmalı.
+  function appendErrorLine(text) {
+    const banner = document.getElementById("global-error-banner");
+    const textEl = document.getElementById("global-error-text");
+    if (!banner || !textEl) return;
+    if (textEl.childNodes.length > 0) textEl.appendChild(document.createElement("br")), textEl.appendChild(document.createElement("br"));
+    const line = document.createElement("span");
+    line.textContent = text; // textContent = otomatik güvenli, HTML olarak yorumlanmaz
+    textEl.appendChild(line);
+    banner.style.display = "block";
+  }
   window.addEventListener("error", function(e) {
     try {
-      const banner = document.getElementById("global-error-banner");
-      const textEl = document.getElementById("global-error-text");
-      if (banner && textEl) {
-        const msg = (e.message || "Bilinmeyen hata") + " — " + (e.filename ? e.filename.split("/").pop() : "?") + ":" + (e.lineno || "?");
-        textEl.innerHTML += (textEl.innerHTML ? "<br><br>" : "") + msg;
-        banner.style.display = "block";
-      }
+      const msg = (e.message || "Bilinmeyen hata") + " — " + (e.filename ? e.filename.split("/").pop() : "?") + ":" + (e.lineno || "?");
+      appendErrorLine(msg);
     } catch(_) {}
   });
   window.addEventListener("unhandledrejection", function(e) {
     try {
-      const banner = document.getElementById("global-error-banner");
-      const textEl = document.getElementById("global-error-text");
-      if (banner && textEl) {
-        textEl.innerHTML += (textEl.innerHTML ? "<br><br>" : "") + "Promise hatası: " + (e.reason?.message || e.reason);
-        banner.style.display = "block";
-      }
+      appendErrorLine("Promise hatası: " + (e.reason?.message || e.reason));
     } catch(_) {}
   });
 </script>
@@ -1432,7 +1435,7 @@ function renderCatBar() {
   document.getElementById("cat-bar").innerHTML = catOrder.filter(key => menuData[key]).map(key => {
     const cat = menuData[key]; const a = activeCat === key;
     return `<button class="cat-btn" style="${a?`background:${cat.color};border-color:${cat.color};color:#fff`:""}"
-      onclick="switchCat('${key}')">${cat.icon} ${cat.label}</button>`;
+      onclick="switchCat('${key}')">${escapeHTML(cat.icon)} ${escapeHTML(cat.label)}</button>`;
   }).join("");
 }
 function renderAlphaBar() {
@@ -1464,10 +1467,10 @@ function renderGrid() {
       html += `<div class="promo-card" style="${inCart?`background:#fdf6ec;border-color:#5aa86a`:""}"
         onclick="addToCart('promo','${esc}',null,${item.price},'${item.icon||""}')">
         <div style="display:flex;align-items:center;gap:13px">
-          <div class="promo-icon" style="${inCart?"background:#e3f3e6":""}">${item.icon||""}</div>
+          <div class="promo-icon" style="${inCart?"background:#e3f3e6":""}">${escapeHTML(item.icon||"")}</div>
           <div>
-            <div style="font-size:14px;font-weight:700;color:#2b2118;margin-bottom:2px">${item.name}</div>
-            <div style="font-size:11px;color:#aa9786">${item.desc||""}</div>
+            <div style="font-size:14px;font-weight:700;color:#2b2118;margin-bottom:2px">${escapeHTML(item.name)}</div>
+            <div style="font-size:11px;color:#aa9786">${escapeHTML(item.desc||"")}</div>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:9px;flex-shrink:0">
@@ -1504,8 +1507,8 @@ function renderGrid() {
     html += `<div class="card">
       <div class="card-shimmer" style="background:linear-gradient(90deg,transparent,${color}55,transparent)"></div>
       <div>
-        <div class="card-letter" style="color:${color}">${item.name[0]}</div>
-        <div class="card-name">${item.name}</div>
+        <div class="card-letter" style="color:${color}">${escapeHTML(item.name[0])}</div>
+        <div class="card-name">${escapeHTML(item.name)}</div>
         ${pairedLabel?`<div class="card-paired">${pairedLabel}</div>`:""}
       </div>
       <div class="size-btns">
@@ -1622,7 +1625,7 @@ function switchCat(key) {
     try {
       const banner = document.getElementById("global-error-banner");
       const textEl = document.getElementById("global-error-text");
-      if (banner && textEl) { textEl.innerHTML = "Kategori açma hatası: " + (e?.message || e); banner.style.display = "block"; }
+      if (banner && textEl) { textEl.textContent = "Kategori açma hatası: " + (e?.message || e); banner.style.display = "block"; }
     } catch(_) {}
   }
 }
@@ -1722,7 +1725,7 @@ function renderItemsTab() {
     const hasSizes = !!item.sizes;
     return `<div class="item-row">
       <div style="flex:1;min-width:0">
-        <div class="item-row-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.name}</div>
+        <div class="item-row-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHTML(item.name)}</div>
         <div class="item-row-price">${hasSizes ? `B:${item.sizes.B}₺ / ÇB:${item.sizes.CB}₺` : `${item.price}₺`}</div>
       </div>
       <div class="item-row-actions">
@@ -1782,8 +1785,8 @@ function renderCategoriesTab() {
     return `<div class="item-row">
       <div style="display:flex;align-items:center;gap:10px;flex:1">
         <div class="cat-color-dot" style="background:${cat.color}"></div>
-        <span style="font-size:14px">${cat.icon}</span>
-        <span style="font-size:14px;font-weight:600">${cat.label}</span>
+        <span style="font-size:14px">${escapeHTML(cat.icon)}</span>
+        <span style="font-size:14px;font-weight:600">${escapeHTML(cat.label)}</span>
         <span style="font-size:11px;color:#aa9786">${cat.items.length} ürün</span>
       </div>
       <div style="display:flex;gap:6px">
@@ -2255,7 +2258,7 @@ function renderStockTab() {
         <div style="display:flex;align-items:center;gap:10px">
           <span style="font-size:22px">${s.icon||"📦"}</span>
           <div>
-            <div style="font-size:14px;font-weight:700;color:${low?'#e05050':'#2b2118'}">${low?'⚠️ ':''}${s.name}</div>
+            <div style="font-size:14px;font-weight:700;color:${low?'#e05050':'#2b2118'}">${low?'⚠️ ':''}${escapeHTML(s.name)}</div>
             <div style="font-size:11px;color:#8a7866">Uyarı eşiği: ${s.warnAt} ${s.unit}</div>
           </div>
         </div>
@@ -2281,7 +2284,7 @@ function renderStockTab() {
   }).join("");
 
   return `
-    ${criticals.length ? `<div style="background:#fff0f0;border:1px solid #ffc8c8;border-radius:12px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#e05050;font-weight:700">⚠️ ${criticals.map(s=>s.name).join(", ")} — kritik seviyede!</div>` : `<div style="background:#e8f5e9;border:1px solid #b2dfdb;border-radius:12px;padding:10px 16px;margin-bottom:14px;font-size:13px;color:#2e7d52;font-weight:600">✅ Tüm stoklar yeterli</div>`}
+    ${criticals.length ? `<div style="background:#fff0f0;border:1px solid #ffc8c8;border-radius:12px;padding:12px 16px;margin-bottom:14px;font-size:13px;color:#e05050;font-weight:700">⚠️ ${criticals.map(s=>escapeHTML(s.name)).join(", ")} — kritik seviyede!</div>` : `<div style="background:#e8f5e9;border:1px solid #b2dfdb;border-radius:12px;padding:10px 16px;margin-bottom:14px;font-size:13px;color:#2e7d52;font-weight:600">✅ Tüm stoklar yeterli</div>`}
 
     <div style="margin-bottom:18px">${rows}</div>
 
@@ -2322,7 +2325,7 @@ function showFatalInitError(e) {
     const banner = document.getElementById("global-error-banner");
     const textEl = document.getElementById("global-error-text");
     if (banner && textEl) {
-      textEl.innerHTML = "Başlangıç hatası: " + (e?.message || e);
+      textEl.textContent = "Başlangıç hatası: " + (e?.message || e);
       banner.style.display = "block";
     }
   } catch(_) {}
@@ -2377,7 +2380,7 @@ function renderCustCatBar() {
   bar.innerHTML = catOrder.filter(k => k !== "promo" && menuData[k]).map(key => {
     const cat = menuData[key]; const a = custActiveCat === key;
     return `<button class="cat-btn" style="${a?`background:${cat.color};border-color:${cat.color};color:#fff`:""}"
-      onclick="switchCustCat('${key}')">${cat.icon} ${cat.label}</button>`;
+      onclick="switchCustCat('${key}')">${escapeHTML(cat.icon)} ${escapeHTML(cat.label)}</button>`;
   }).join("");
 }
 function renderCustAlphaBar() {
@@ -2404,8 +2407,8 @@ function renderCustGrid() {
     html += `<div class="card">
       <div class="card-shimmer" style="background:linear-gradient(90deg,transparent,${color}55,transparent)"></div>
       <div>
-        <div class="card-letter" style="color:${color}">${item.name[0]}</div>
-        <div class="card-name">${item.name}</div>
+        <div class="card-letter" style="color:${color}">${escapeHTML(item.name[0])}</div>
+        <div class="card-name">${escapeHTML(item.name)}</div>
       </div>
       <div class="size-btns">
         ${hasSizes
